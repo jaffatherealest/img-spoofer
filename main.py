@@ -298,5 +298,190 @@ def compare(
         raise typer.Exit(1)
 
 
+@app.command()
+def scan(
+    folder: Path = typer.Argument(
+        ...,
+        help="Folder containing images to scan",
+        exists=True,
+        dir_okay=True,
+        file_okay=False,
+    ),
+    threshold: int = typer.Option(
+        31,
+        "--threshold", "-t",
+        help="Distance threshold for 'similar' (<=threshold = similar)",
+        min=0,
+        max=256,
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Save results to JSON file",
+    ),
+    show_all: bool = typer.Option(
+        False,
+        "--all", "-a",
+        help="Show all pairs (by default only shows similar pairs)",
+    ),
+):
+    """
+    Scan a folder and compare all images against each other.
+
+    Finds duplicate/similar images based on PDQ hash distance.
+    By default only shows pairs with distance <= 31 (similar).
+    """
+    import json
+    from itertools import combinations
+    from pdq_checker import get_pdq_hash_from_path, hamming_distance
+    from rich.progress import Progress
+
+    # Find images
+    try:
+        image_paths = get_supported_images(str(folder))
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if len(image_paths) < 2:
+        console.print(f"[yellow]Need at least 2 images to compare. Found: {len(image_paths)}[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Scanning {len(image_paths)} images in {folder}[/bold]")
+    console.print()
+
+    # Compute all hashes
+    hashes = {}
+    skipped = []
+
+    with Progress() as progress:
+        task = progress.add_task("[cyan]Computing hashes...", total=len(image_paths))
+
+        for img_path in image_paths:
+            try:
+                pdq_hash, quality = get_pdq_hash_from_path(str(img_path))
+                if quality >= 50:
+                    hashes[img_path.name] = {
+                        "path": str(img_path),
+                        "hash": pdq_hash,
+                        "quality": quality,
+                    }
+                else:
+                    skipped.append((img_path.name, f"low quality ({quality})"))
+            except Exception as e:
+                skipped.append((img_path.name, str(e)))
+
+            progress.update(task, advance=1)
+
+    if skipped:
+        console.print(f"[yellow]Skipped {len(skipped)} images:[/yellow]")
+        for name, reason in skipped[:5]:  # Show first 5
+            console.print(f"  - {name}: {reason}")
+        if len(skipped) > 5:
+            console.print(f"  ... and {len(skipped) - 5} more")
+        console.print()
+
+    # Compare all pairs
+    image_names = list(hashes.keys())
+    total_pairs = len(image_names) * (len(image_names) - 1) // 2
+
+    console.print(f"Comparing {total_pairs} pairs...")
+
+    results = []
+    similar_count = 0
+
+    with Progress() as progress:
+        task = progress.add_task("[cyan]Comparing...", total=total_pairs)
+
+        for img1, img2 in combinations(image_names, 2):
+            distance = hamming_distance(hashes[img1]["hash"], hashes[img2]["hash"])
+
+            is_similar = distance <= threshold
+            if is_similar:
+                similar_count += 1
+
+            results.append({
+                "image1": img1,
+                "image2": img2,
+                "distance": distance,
+                "similar": is_similar,
+            })
+
+            progress.update(task, advance=1)
+
+    # Sort by distance (most similar first)
+    results.sort(key=lambda x: x["distance"])
+
+    # Display results
+    console.print()
+
+    if show_all:
+        display_results = results
+        title = f"All Pairs ({len(results)} comparisons)"
+    else:
+        display_results = [r for r in results if r["similar"]]
+        title = f"Similar Pairs (distance <= {threshold})"
+
+    if display_results:
+        table = Table(title=title)
+        table.add_column("Image 1", style="cyan")
+        table.add_column("Image 2", style="cyan")
+        table.add_column("Distance", justify="right")
+        table.add_column("Status", justify="center")
+
+        for r in display_results[:50]:  # Limit to 50 rows
+            if r["distance"] <= threshold:
+                status = "[red]SIMILAR[/red]"
+            elif r["distance"] <= 50:
+                status = "[yellow]CLOSE[/yellow]"
+            else:
+                status = "[green]DIFFERENT[/green]"
+
+            table.add_row(
+                r["image1"][:30],
+                r["image2"][:30],
+                str(r["distance"]),
+                status,
+            )
+
+        if len(display_results) > 50:
+            table.add_row("...", "...", "...", f"[dim]+{len(display_results) - 50} more[/dim]")
+
+        console.print(table)
+    else:
+        console.print(f"[green]No similar pairs found (all distances > {threshold})[/green]")
+
+    # Summary
+    console.print()
+    console.print(f"[bold]Summary:[/bold]")
+    console.print(f"  Images scanned: {len(hashes)}")
+    console.print(f"  Total pairs:    {total_pairs}")
+    console.print(f"  Similar pairs:  {similar_count} (distance <= {threshold})")
+
+    if results:
+        distances = [r["distance"] for r in results]
+        console.print(f"  Min distance:   {min(distances)}")
+        console.print(f"  Max distance:   {max(distances)}")
+        console.print(f"  Avg distance:   {sum(distances) / len(distances):.1f}")
+
+    # Save to JSON if requested
+    if output:
+        output_data = {
+            "folder": str(folder),
+            "threshold": threshold,
+            "images": hashes,
+            "comparisons": results,
+            "summary": {
+                "total_images": len(hashes),
+                "skipped_images": len(skipped),
+                "total_pairs": total_pairs,
+                "similar_pairs": similar_count,
+            }
+        }
+        with open(output, "w") as f:
+            json.dump(output_data, f, indent=2)
+        console.print(f"\n[bold]Results saved to:[/bold] {output}")
+
+
 if __name__ == "__main__":
     app()

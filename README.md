@@ -50,6 +50,9 @@ python main.py spoof --input-dir input --variants 12 --target-size 1080x1350
 # Higher PDQ distance threshold (stricter uniqueness)
 python main.py spoof --input-dir input --min-distance 50
 
+# Scan a folder for duplicate/similar images
+python main.py scan ~/Pictures/content
+
 # Check a single image's PDQ hash
 python main.py check path/to/image.jpg
 
@@ -69,6 +72,30 @@ python main.py compare original.jpg variant.jpg
 | `--target-size` | Resize output (e.g., `1080x1350`) | original size |
 | `--quality`, `-q` | JPEG quality 1-100 | 95 |
 | `--verbose`, `-v` | Show detailed progress | off |
+
+### Scan Command
+
+Scan a folder to find duplicate or similar images by comparing all images against each other.
+
+```bash
+# Basic scan - shows only similar pairs (distance <= 31)
+python main.py scan /path/to/folder
+
+# Show all comparisons
+python main.py scan /path/to/folder --all
+
+# Custom similarity threshold
+python main.py scan /path/to/folder --threshold 50
+
+# Save results to JSON
+python main.py scan /path/to/folder --output results.json
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--threshold`, `-t` | Distance threshold for "similar" | 31 |
+| `--output`, `-o` | Save full results to JSON file | none |
+| `--all`, `-a` | Show all pairs, not just similar ones | off |
 
 ### Output Structure
 
@@ -120,6 +147,12 @@ python main.py spoof -i input -n 3 --dry-run --verbose
 ```bash
 python main.py compare input/original.jpg output/original/original_v01.jpg
 # Output: Hamming Distance: 98 - DIFFERENT (distance > 31)
+```
+
+**Find duplicates in your content library:**
+```bash
+python main.py scan ~/Pictures/marketing_assets --output duplicates.json
+# Shows all similar pairs and saves full report
 ```
 
 ## Supported Formats

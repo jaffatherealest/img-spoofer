@@ -116,6 +116,12 @@ python main.py spoof -i input -n 10 --dry-run --verbose
 # For Threads/Instagram Stories
 python main.py spoof -i input -n 12 --target-size 1080x1350
 
+# Scan folder for duplicates/similar images
+python main.py scan ~/Pictures/content
+
+# Scan with JSON output
+python main.py scan ~/Pictures/content --output duplicates.json
+
 # Check PDQ hash of one image
 python main.py check input/photo.jpg
 
