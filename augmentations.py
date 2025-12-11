@@ -1,192 +1,191 @@
 """
-Augmentation recipes for image spoofing.
+Image spoofing recipes that actually break PDQ hashing.
 
-Goal: Change pixels enough to break PDQ hash while preserving visual quality.
-Each recipe is designed for minimal visual change while maximizing PDQ hash difference.
+Reality: PDQ is robust against pixel-level changes. Only geometric
+transformations (crops, rotations) reliably break the hash.
+
+These recipes use minimal geometric changes that are hard to notice
+in social media feeds but sufficient to evade duplicate detection.
 """
 
 import random
-import warnings
-from typing import Dict, List, Callable
+from typing import Dict, List, Callable, Tuple
 
-import albumentations as A
+import cv2
 import numpy as np
 
-# Suppress albumentations deprecation warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='albumentations')
+
+def micro_crop(image: np.ndarray) -> np.ndarray:
+    """
+    Recipe 1: Micro Crop (3-5% from edges)
+
+    Crops a small amount from edges and resizes back.
+    3% crop = distance ~64, 5% crop = distance ~80+
+    """
+    h, w = image.shape[:2]
+    crop_pct = random.uniform(0.04, 0.06)  # 4-6%
+
+    margin_h = int(h * crop_pct)
+    margin_w = int(w * crop_pct)
+
+    # Random which edges to crop more
+    top = random.randint(0, margin_h)
+    bottom = random.randint(0, margin_h)
+    left = random.randint(0, margin_w)
+    right = random.randint(0, margin_w)
+
+    cropped = image[top:h-bottom, left:w-right]
+    result = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LANCZOS4)
+
+    return result
 
 
-def get_subtle_crop_color() -> A.Compose:
+def micro_rotate(image: np.ndarray) -> np.ndarray:
     """
-    Recipe 1: Subtle Crop + Color
-    - Tiny crop and resize back
-    - Minor brightness/contrast adjustments
-    - Very subtle noise
+    Recipe 2: Micro Rotation (2-4 degrees)
+
+    Rotates image by a small amount using border reflection
+    to avoid black corners.
     """
-    return A.Compose([
-        A.RandomResizedCrop(
-            size=(1, 1),  # Will be resized to match input
-            scale=(0.90, 0.98),
-            ratio=(0.95, 1.05),
-            p=1.0
-        ),
-        A.RandomBrightnessContrast(
-            brightness_limit=0.08,
-            contrast_limit=0.08,
-            p=0.9
-        ),
-        A.GaussNoise(
-            std_range=(0.02, 0.08),
-            p=0.8
-        ),
+    h, w = image.shape[:2]
+    angle = random.uniform(2.0, 4.0) * random.choice([-1, 1])
+
+    center = (w // 2, h // 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+
+    # Use border reflection to fill edges with mirrored pixels (no black corners)
+    result = cv2.warpAffine(
+        image, matrix, (w, h),
+        borderMode=cv2.BORDER_REFLECT_101
+    )
+
+    return result
+
+
+def micro_perspective(image: np.ndarray) -> np.ndarray:
+    """
+    Recipe 3: Micro Perspective Warp
+
+    Applies a perspective transformation.
+    """
+    h, w = image.shape[:2]
+
+    # Perspective shift (3-5% of image dimensions)
+    shift = random.uniform(0.03, 0.05)
+    shift_px_w = int(w * shift)
+    shift_px_h = int(h * shift)
+
+    # Original corners
+    src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+
+    # Shifted corners (random direction)
+    dst = np.float32([
+        [random.randint(0, shift_px_w), random.randint(0, shift_px_h)],
+        [w - random.randint(0, shift_px_w), random.randint(0, shift_px_h)],
+        [w - random.randint(0, shift_px_w), h - random.randint(0, shift_px_h)],
+        [random.randint(0, shift_px_w), h - random.randint(0, shift_px_h)]
     ])
 
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    result = cv2.warpPerspective(image, matrix, (w, h), borderMode=cv2.BORDER_REFLECT_101)
 
-def get_perspective_shift() -> A.Compose:
-    """
-    Recipe 2: Perspective Shift
-    - Nearly invisible perspective warp
-    - Subtle color adjustments
-    - Light blur then sharpen
-    """
-    return A.Compose([
-        A.Perspective(
-            scale=(0.02, 0.05),
-            keep_size=True,
-            p=1.0
-        ),
-        A.HueSaturationValue(
-            hue_shift_limit=8,
-            sat_shift_limit=12,
-            val_shift_limit=8,
-            p=0.9
-        ),
-        A.OneOf([
-            A.Blur(blur_limit=3, p=1.0),
-            A.GaussianBlur(blur_limit=(3, 5), p=1.0),
-        ], p=0.5),
-        A.Sharpen(
-            alpha=(0.1, 0.3),
-            lightness=(0.9, 1.1),
-            p=0.6
-        ),
-    ])
+    return result
 
 
-def get_color_temperature() -> A.Compose:
+def crop_and_rotate(image: np.ndarray) -> np.ndarray:
     """
-    Recipe 3: Color Temperature
-    - Small rotation and scale
-    - RGB channel shifts
-    - Gamma adjustments
+    Recipe 4: Combined Crop + Rotation
+
+    Crop combined with rotation for stronger effect.
     """
-    return A.Compose([
-        A.Affine(
-            translate_percent={'x': (-0.02, 0.02), 'y': (-0.02, 0.02)},
-            scale=(0.97, 1.03),
-            rotate=(-3, 3),
-            p=1.0
-        ),
-        A.RGBShift(
-            r_shift_limit=15,
-            g_shift_limit=15,
-            b_shift_limit=15,
-            p=0.9
-        ),
-        A.RandomGamma(
-            gamma_limit=(90, 110),
-            p=0.8
-        ),
-    ])
+    # First apply crop
+    h, w = image.shape[:2]
+    crop_pct = random.uniform(0.02, 0.03)  # 2-3%
+    margin = int(min(h, w) * crop_pct)
+
+    cropped = image[margin:h-margin, margin:w-margin]
+    cropped = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LANCZOS4)
+
+    # Then apply rotation with border reflection (no black corners)
+    angle = random.uniform(1.5, 2.5) * random.choice([-1, 1])
+    center = (w // 2, h // 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    result = cv2.warpAffine(cropped, matrix, (w, h), borderMode=cv2.BORDER_REFLECT_101)
+
+    return result
 
 
-def get_quality_shift() -> A.Compose:
+def asymmetric_crop(image: np.ndarray) -> np.ndarray:
     """
-    Recipe 4: Quality Shift
-    - JPEG compression/recompression
-    - Light sharpening
-    - Subtle noise
+    Recipe 5: Asymmetric Crop
+
+    Crops more from one side than the other.
+    Changes composition slightly but hard to notice.
     """
-    return A.Compose([
-        A.ImageCompression(
-            quality_range=(85, 94),
-            p=1.0
-        ),
-        A.UnsharpMask(
-            blur_limit=(3, 5),
-            sigma_limit=0.5,
-            alpha=(0.2, 0.5),
-            threshold=10,
-            p=0.7
-        ),
-        A.GaussNoise(
-            std_range=(0.01, 0.04),
-            p=0.6
-        ),
-    ])
+    h, w = image.shape[:2]
+
+    # More crop from one random side
+    side = random.choice(['top', 'bottom', 'left', 'right'])
+    heavy_crop = random.uniform(0.04, 0.06)  # 4-6%
+    light_crop = random.uniform(0.01, 0.02)  # 1-2%
+
+    if side == 'top':
+        top = int(h * heavy_crop)
+        bottom = int(h * light_crop)
+        left = right = int(w * light_crop)
+    elif side == 'bottom':
+        bottom = int(h * heavy_crop)
+        top = int(h * light_crop)
+        left = right = int(w * light_crop)
+    elif side == 'left':
+        left = int(w * heavy_crop)
+        right = int(w * light_crop)
+        top = bottom = int(h * light_crop)
+    else:
+        right = int(w * heavy_crop)
+        left = int(w * light_crop)
+        top = bottom = int(h * light_crop)
+
+    cropped = image[top:h-bottom, left:w-right]
+    result = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LANCZOS4)
+
+    return result
 
 
-def get_micro_transform() -> A.Compose:
+def scale_shift(image: np.ndarray) -> np.ndarray:
     """
-    Recipe 5: Micro Transform
-    - Tiny affine transformations
-    - Occasional channel operations
-    """
-    return A.Compose([
-        A.Affine(
-            translate_percent={'x': (-0.02, 0.02), 'y': (-0.02, 0.02)},
-            rotate=(-2, 2),
-            scale=(0.98, 1.02),
-            shear=(-1, 1),
-            p=1.0
-        ),
-        A.ChannelShuffle(p=0.05),  # Very rare
-        A.ToGray(p=0.02),  # Extremely rare - converts and loses color
-        A.GaussNoise(
-            std_range=(0.01, 0.03),
-            p=0.5
-        ),
-    ])
+    Recipe 6: Scale and Shift
 
+    Scales up and shifts the crop window.
+    """
+    h, w = image.shape[:2]
 
-def get_texture_noise() -> A.Compose:
-    """
-    Recipe 6: Texture Noise
-    - ISO-like noise
-    - Subtle posterization
-    - Light emboss
-    """
-    return A.Compose([
-        A.ISONoise(
-            color_shift=(0.01, 0.05),
-            intensity=(0.1, 0.3),
-            p=0.9
-        ),
-        A.Posterize(
-            num_bits=7,  # Subtle - still 128 levels per channel
-            p=0.4
-        ),
-        A.Emboss(
-            alpha=(0.1, 0.2),
-            strength=(0.3, 0.5),
-            p=0.3
-        ),
-        A.RandomBrightnessContrast(
-            brightness_limit=0.05,
-            contrast_limit=0.05,
-            p=0.5
-        ),
-    ])
+    # Scale up by 4-6%
+    scale = random.uniform(1.04, 1.06)
+    new_h, new_w = int(h * scale), int(w * scale)
+
+    scaled = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+
+    # Random crop position
+    max_offset_h = new_h - h
+    max_offset_w = new_w - w
+
+    offset_h = random.randint(0, max_offset_h)
+    offset_w = random.randint(0, max_offset_w)
+
+    result = scaled[offset_h:offset_h+h, offset_w:offset_w+w]
+
+    return result
 
 
 # Recipe registry
-RECIPES: Dict[str, Callable[[], A.Compose]] = {
-    'subtle_crop_color': get_subtle_crop_color,
-    'perspective_shift': get_perspective_shift,
-    'color_temperature': get_color_temperature,
-    'quality_shift': get_quality_shift,
-    'micro_transform': get_micro_transform,
-    'texture_noise': get_texture_noise,
+RECIPES: Dict[str, Callable[[np.ndarray], np.ndarray]] = {
+    'micro_crop': micro_crop,
+    'micro_rotate': micro_rotate,
+    'micro_perspective': micro_perspective,
+    'crop_rotate': crop_and_rotate,
+    'asymmetric_crop': asymmetric_crop,
+    'scale_shift': scale_shift,
 }
 
 
@@ -195,97 +194,37 @@ def get_recipe_names() -> List[str]:
     return list(RECIPES.keys())
 
 
-def get_random_recipe(enabled_recipes: List[str] = None) -> tuple[str, A.Compose]:
-    """
-    Get a random augmentation recipe.
-
-    Args:
-        enabled_recipes: List of recipe names to choose from. If None, use all.
-
-    Returns:
-        Tuple of (recipe_name, augmentation_pipeline)
-    """
+def get_random_recipe(enabled_recipes: List[str] = None) -> Tuple[str, Callable]:
+    """Get a random augmentation recipe."""
     if enabled_recipes is None:
         enabled_recipes = list(RECIPES.keys())
 
     recipe_name = random.choice(enabled_recipes)
     recipe_fn = RECIPES[recipe_name]
 
-    return recipe_name, recipe_fn()
+    return recipe_name, recipe_fn
 
 
 def apply_augmentation(
     image: np.ndarray,
     recipe_name: str = None,
     enabled_recipes: List[str] = None
-) -> tuple[np.ndarray, str]:
+) -> Tuple[np.ndarray, str]:
     """
-    Apply a random augmentation recipe to an image.
-
-    Args:
-        image: Input image as numpy array (H, W, C) in RGB format
-        recipe_name: Specific recipe to use. If None, pick random.
-        enabled_recipes: List of enabled recipes to choose from.
-
-    Returns:
-        Tuple of (augmented_image, recipe_name_used)
+    Apply a geometric augmentation to break PDQ hash.
     """
     if recipe_name is not None:
         if recipe_name not in RECIPES:
-            raise ValueError(f"Unknown recipe: {recipe_name}. Available: {list(RECIPES.keys())}")
-        name = recipe_name
-        transform = RECIPES[name]()
-    else:
-        name, transform = get_random_recipe(enabled_recipes)
+            raise ValueError(f"Unknown recipe: {recipe_name}")
+        return RECIPES[recipe_name](image), recipe_name
 
-    # For RandomResizedCrop, we need to set the output size to match input
-    # We'll create a wrapper that handles this
-    h, w = image.shape[:2]
+    # Pick a random recipe
+    available = enabled_recipes or list(RECIPES.keys())
+    name = random.choice(available)
 
-    # Create a new compose with correct size for crop operations
-    augmented = transform(image=image)['image']
-
-    # Ensure output is same size as input (some transforms may change size)
-    if augmented.shape[:2] != (h, w):
-        import cv2
-        augmented = cv2.resize(augmented, (w, h), interpolation=cv2.INTER_LANCZOS4)
-
-    return augmented, name
+    return RECIPES[name](image), name
 
 
-def create_sized_recipe(recipe_name: str, height: int, width: int) -> A.Compose:
-    """
-    Create a recipe with correct output size.
-
-    For recipes that include RandomResizedCrop or similar size-changing transforms,
-    this ensures the output matches the desired dimensions.
-
-    Args:
-        recipe_name: Name of the recipe
-        height: Target height
-        width: Target width
-
-    Returns:
-        Configured augmentation pipeline
-    """
-    if recipe_name == 'subtle_crop_color':
-        return A.Compose([
-            A.RandomResizedCrop(
-                size=(height, width),
-                scale=(0.90, 0.98),
-                ratio=(0.95, 1.05),
-                p=1.0
-            ),
-            A.RandomBrightnessContrast(
-                brightness_limit=0.08,
-                contrast_limit=0.08,
-                p=0.9
-            ),
-            A.GaussNoise(
-                std_range=(0.02, 0.08),
-                p=0.8
-            ),
-        ])
-    else:
-        # Other recipes don't change size, use default
-        return RECIPES[recipe_name]()
+def create_sized_recipe(recipe_name: str, height: int, width: int):
+    """Compatibility function."""
+    return RECIPES.get(recipe_name, micro_crop)
