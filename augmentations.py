@@ -62,32 +62,23 @@ def micro_rotate(image: np.ndarray) -> np.ndarray:
     return result
 
 
-def micro_perspective(image: np.ndarray) -> np.ndarray:
+def center_zoom_crop(image: np.ndarray) -> np.ndarray:
     """
-    Recipe 3: Micro Perspective Warp
+    Recipe 3: Center Zoom Crop
 
-    Applies a perspective transformation.
+    Zooms into center of image by cropping edges uniformly.
+    Doesn't distort proportions - safe for portraits.
     """
     h, w = image.shape[:2]
 
-    # Perspective shift (3-5% of image dimensions)
-    shift = random.uniform(0.03, 0.05)
-    shift_px_w = int(w * shift)
-    shift_px_h = int(h * shift)
+    # Crop 4-6% from all edges uniformly (zooms into center)
+    crop_pct = random.uniform(0.04, 0.06)
+    margin_h = int(h * crop_pct)
+    margin_w = int(w * crop_pct)
 
-    # Original corners
-    src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
-
-    # Shifted corners (random direction)
-    dst = np.float32([
-        [random.randint(0, shift_px_w), random.randint(0, shift_px_h)],
-        [w - random.randint(0, shift_px_w), random.randint(0, shift_px_h)],
-        [w - random.randint(0, shift_px_w), h - random.randint(0, shift_px_h)],
-        [random.randint(0, shift_px_w), h - random.randint(0, shift_px_h)]
-    ])
-
-    matrix = cv2.getPerspectiveTransform(src, dst)
-    result = cv2.warpPerspective(image, matrix, (w, h), borderMode=cv2.BORDER_REFLECT_101)
+    # Uniform crop from all sides
+    cropped = image[margin_h:h-margin_h, margin_w:w-margin_w]
+    result = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LANCZOS4)
 
     return result
 
@@ -182,7 +173,7 @@ def scale_shift(image: np.ndarray) -> np.ndarray:
 RECIPES: Dict[str, Callable[[np.ndarray], np.ndarray]] = {
     'micro_crop': micro_crop,
     'micro_rotate': micro_rotate,
-    'micro_perspective': micro_perspective,
+    'center_zoom': center_zoom_crop,
     'crop_rotate': crop_and_rotate,
     'asymmetric_crop': asymmetric_crop,
     'scale_shift': scale_shift,
